@@ -124,12 +124,15 @@ const str = (s: unknown, fallback: string, max = 300) =>
 
 type Turn = { said: string; chose: string };
 
-async function callOpenAI(messages: unknown[], apiKey: string) {
+const PRIMARY_MODEL = process.env.OPENAI_MODEL || "gpt-6-luna";
+const FALLBACK_MODEL = process.env.OPENAI_FALLBACK_MODEL || "gpt-4o";
+
+async function callOpenAI(messages: unknown[], apiKey: string, model: string) {
   return fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-4o",
+      model,
       temperature: 0.8,
       max_tokens: 600,
       response_format: { type: "json_schema", json_schema: SCHEMA },
@@ -176,8 +179,14 @@ export async function POST(req: Request) {
   ];
 
   try {
-    let res = await callOpenAI(messages, apiKey);
-    if (!res.ok) res = await callOpenAI(messages, apiKey); // one retry
+    let res = await callOpenAI(messages, apiKey, PRIMARY_MODEL);
+    if (!res.ok && res.status >= 500) {
+      res = await callOpenAI(messages, apiKey, PRIMARY_MODEL); // transient, retry same model
+    }
+    if (!res.ok && PRIMARY_MODEL !== FALLBACK_MODEL) {
+      console.error("falling back from", PRIMARY_MODEL, res.status);
+      res = await callOpenAI(messages, apiKey, FALLBACK_MODEL);
+    }
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error("openai", res.status, detail.slice(0, 400));
